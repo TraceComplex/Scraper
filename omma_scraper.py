@@ -10,6 +10,10 @@ from time import sleep
 import sqlite3
 from sqlite3 import Error
 
+import sys
+
+from pathlib import Path
+
 __author__ = "matthew smith"
 __copyright__ = " Copyright 2023, matthew smith"
 __credits__ = ["Josh McVay"]
@@ -66,15 +70,45 @@ def scrape_links(driver, read_links, outfile):
     """
     Scrape the data from each page and write the contents to a csv file
     """
-    for each in read_links:
-        driver.get(each)
+    for link in read_links:
+        driver.get(link)
         delay = 3
         sleep(3) #delay until the page has been populated
         myElem = WebDriverWait(driver, delay).until(EC.presence_of_element_located((By.CLASS_NAME,'row')))
         #pull the data, write it to the csv
         data = driver.find_elements(By.CSS_SELECTOR,'.col-md-8')
         clean_data = []
-        for each in data: clean_data.append('"' + each.get_attribute('innerHTML') + '"')
+        for each in data:
+            innerHTML = each.get_attribute('innerHTML').strip()
+            for char in ['\n','\r']:
+                innerHTML = innerHTML.replace(char,'')
+            clean_data.append(f'"{innerHTML}"')
+
+        #now we need to attempt to order the data
+        for datum in clean_data:
+        #if the county field is numeric, we know it's actually the zip code, and need to insert a blank field
+            if clean_data.index(datum) == 5: 
+                print(datum.replace('-',''))
+                if datum.replace('-','').replace('"','').isnumeric():
+                    clean_data.insert(clean_data.index(datum),'""')
+        #zip codes will either be 5 or 9 numerals. If there's 10+ chars, it's a phone number
+            if clean_data.index(datum) == 6:
+                print(len(datum.replace('-','').replace('"','')))
+                if len(datum.replace('-','').replace('"','')) >= 10:
+                    clean_data.insert(clean_data.index(datum),'""')
+            #telephone numbers will never contain the @ symbol
+            if clean_data.index(datum) == 7:
+                print(datum)
+                if '@' in datum:
+                    clean_data.insert(clean_data.index(datum),'""')
+            #likewise, emails will always contain the @ symbol
+            if clean_data.index(datum) == 8:
+                print(datum)
+                if '@' not in datum:
+                    clean_data.insert(clean_data.index(datum),'""')
+
+        #add the url for reference
+        clean_data.append(f'"{link}"')
         print(','.join(clean_data))
         outfile.write(','.join(clean_data) + '\n')
 
@@ -130,12 +164,24 @@ if __name__ == "__main__":
     #initialize the window
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
     #get the target page
-    driver.get('https://omma.us.thentiacloud.net/webs/omma/register/#/business/search/all/Grower')
-    print('Loading page...')
-    sleep(20)
-    master_link = []
-    read_links = make_links(driver, master_link)
-    write_linkfile('linkfile.txt', read_links)
+    target = 'Grower'
+    linkfile = ''
+    try:
+        target = sys.argv[1]
+        linkfile = sys.argv[2]
+    except:
+        pass
+    #check to see if we are targeting a linkfile:
+    path = Path(linkfile)
+    if path.is_file():
+        read_links = read_linkfile(linkfile)
+    #otherwise, build a new one
+    else:
+        driver.get(f'https://omma.us.thentiacloud.net/webs/omma/register/#/business/search/all/{target}')
+        print('Loading page...')
+        sleep(20)
+        read_links = make_links(driver, master_link)
+        write_linkfile('linkfile.txt', read_links)
     with open('omma_web_scrape.csv', 'w') as outfile:
-        outfile.write('DBA,License Type,License Expiration,Street Address,City,County,ZIP Code,Telephone Number,E-mail,Hours of Operation \n')
+        outfile.write('DBA,License Type,License Expiration,Street Address,City,County,ZIP Code,Telephone Number,E-mail,Hours of Operation,URL \n')
         scrape_links(driver, read_links, outfile)
